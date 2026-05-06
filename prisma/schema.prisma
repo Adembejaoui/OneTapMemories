@@ -1,0 +1,77 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DIRECT_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  image     String?
+  password  String
+  role      Role     @default(ADMIN)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Event {
+  id                 String   @id @default(cuid())
+  name               String
+  slug               String   @unique
+  email              String
+  image              String?
+  maxUploadsPerGuest Int      @default(10)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  uploads            Upload[]
+
+  @@index([slug])
+  @@map("events")
+}
+
+model Upload {
+  id         String   @id @default(cuid())
+  eventId    String
+  url        String
+  guestToken String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  event      Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@index([guestToken])
+  @@index([createdAt])
+  @@map("uploads")
+}
+
+model EventCreationToken {
+  id        String    @id @default(cuid())
+  token     String    @unique
+  isUsed    Boolean   @default(false)
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  usedBy    String?
+  usedAt    DateTime?
+
+  @@map("event_creation_tokens")
+}
+
+model RateLimit {
+  key       String   @id
+  count     Int      @default(0)
+  resetAt   DateTime
+  updatedAt DateTime @updatedAt
+
+  @@map("rate_limits")
+}
+
+enum Role {
+  ADMIN
+}

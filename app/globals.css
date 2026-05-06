@@ -1,26 +1,214 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=Courier+Prime:wght@400;700&display=swap');
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
+@layer base {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: 0 0% 100%;
+    --foreground: 20 14.3% 4.1%;
+    --card: 0 0% 100%;
+    --card-foreground: 20 14.3% 4.1%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 20 14.3% 4.1%;
+    --primary: 221 83.3% 53.3%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 13.3% 96.1%;
+    --secondary-foreground: 220 13.3% 9%;
+    --muted: 220 13.3% 96.1%;
+    --muted-foreground: 220 9% 46.1%;
+    --accent: 220 13.3% 96.1%;
+    --accent-foreground: 220 13.3% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13.3% 91.4%;
+    --input: 220 13.3% 91.4%;
+    --ring: 221 83.3% 53.3%;
+    --radius: 0.5rem;
+
+    /* ── Film / cinematic design tokens ── */
+    --film-bg:            #0c0906;
+    --film-surface:       #1a1510;
+    --film-surface-deep:  #0f0c08;
+    --film-track-bg:      #0a0804;
+    --film-bar-bg:        #121008;
+    --film-photo-bg:      #0d0b08;
+
+    --film-gold:          rgba(210, 160,  80, 1);
+    --film-gold-60:       rgba(210, 160,  80, 0.6);
+    --film-gold-45:       rgba(210, 160,  80, 0.45);
+    --film-gold-35:       rgba(210, 160,  80, 0.35);
+    --film-gold-20:       rgba(210, 160,  80, 0.20);
+    --film-gold-15:       rgba(210, 160,  80, 0.15);
+    --film-gold-10:       rgba(210, 160,  80, 0.10);
+    --film-gold-05:       rgba(210, 160,  80, 0.05);
+
+    --film-text-primary:  rgba(245, 225, 180, 0.97);
+    --film-text-muted:    rgba(180, 150, 100, 0.60);
+    --film-text-faint:    rgba(180, 155, 110, 0.60);
+    --film-text-label:    rgba(235, 210, 160, 0.90);
+    --film-text-count:    rgba(235, 210, 160, 0.95);
+    --film-text-meta:     rgba(180, 150,  90, 0.70);
+
+    --film-hole-filled-bg:     rgba(210, 160,  80, 0.50);
+    --film-hole-filled-border: rgba(210, 160,  80, 0.70);
+    --film-hole-empty-bg:      rgba(210, 160,  80, 0.10);
+    --film-hole-empty-border:  rgba(210, 160,  80, 0.15);
+
+    --film-alert-error-bg:     rgba( 60,  15, 10, 0.60);
+    --film-alert-error-border: rgba(200,  80, 50, 0.30);
+    --film-alert-error-text:   rgba(240, 160,120, 0.90);
+    --film-alert-ok-bg:        rgba( 10,  30, 15, 0.60);
+    --film-alert-ok-border:    rgba( 80, 160, 80, 0.30);
+    --film-alert-ok-text:      rgba(150, 220,130, 0.90);
+
+    --film-done-overlay:    rgba( 10,  30, 10, 0.45);
+    --film-upload-overlay:  rgba( 10,   8,  4, 0.55);
+    --film-error-overlay:   rgba( 30,  10,  5, 0.55);
+
+    --film-caption-done:     rgba(150, 210, 130, 0.80);
+    --film-caption-error:    rgba(240, 120,  80, 0.80);
+    --film-caption-uploading:rgba(210, 160,  80, 0.70);
+    --film-caption-name:     rgba(180, 155, 110, 0.60);
+  }
+
+  .dark {
+    --background: 20 14.3% 4.1%;
+    --foreground: 0 0% 100%;
+    --card: 20 14.3% 4.1%;
+    --card-foreground: 0 0% 100%;
+    --popover: 20 14.3% 4.1%;
+    --popover-foreground: 0 0% 100%;
+    --primary: 217 91.2% 59.6%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 13.3% 11.2%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 220 13.3% 11.2%;
+    --muted-foreground: 220 9% 46.1%;
+    --accent: 220 13.3% 11.2%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13.3% 21.2%;
+    --input: 220 13.3% 21.2%;
+    --ring: 221 83.3% 53.3%;
+  }
+
+  * {
+    @apply outline-ring/50;
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  html {
+    @apply font-sans;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ─────────────────────────────────────────
+   Custom utility layer — film aesthetic
+───────────────────────────────────────── */
+@layer utilities {
+  /* Typography */
+  .font-playfair  { font-family: 'Playfair Display', Georgia, serif; }
+  .font-courier   { font-family: 'Courier Prime', 'Courier New', monospace; }
+
+  /* Animations */
+  @keyframes film-spin   { to { transform: rotate(360deg); } }
+  @keyframes film-pulse  { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+  @keyframes film-fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0);    }
+  }
+  .animate-film-spin    { animation: film-spin   0.8s linear infinite; }
+  .animate-film-pulse   { animation: film-pulse  1.2s ease-in-out infinite; }
+  .animate-film-fadeup  { animation: film-fadeUp 0.35s ease both; }
+
+  /* Film thumb hover */
+  .film-thumb-hover {
+    transition: transform 0.2s ease;
+  }
+  .film-thumb-hover:hover {
+    transform: translateY(-3px) rotate(0.5deg);
+    z-index: 10;
+  }
+
+  /* Sepia image that lifts on hover */
+  .film-img {
+    filter: sepia(0.15) contrast(1.05);
+    transition: filter 0.3s ease;
+  }
+  .film-thumb-hover:hover .film-img {
+    filter: sepia(0) contrast(1.1);
+  }
+
+  /* Grain overlay via SVG data-uri */
+  .film-grain::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.08'/%3E%3C/svg%3E");
+    background-size: 120px 120px;
+    pointer-events: none;
+    opacity: 0.6;
+    mix-blend-mode: overlay;
+  }
+
+  /* Page-level grain + vignette */
+  .film-page-grain::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='0.06'/%3E%3C/svg%3E");
+    background-size: 256px;
+    mix-blend-mode: overlay;
+    opacity: 0.8;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .film-page-vignette::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.70) 100%);
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  /* Upload zone striped background */
+  .upload-zone-bg {
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(210, 160, 80, 0.015) 2px,
+      rgba(210, 160, 80, 0.015) 4px
+    );
+  }
+  .upload-zone-bg-hover:hover:not([data-disabled='true']) {
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(210, 160, 80, 0.03) 2px,
+      rgba(210, 160, 80, 0.03) 4px
+    );
+  }
+  .upload-zone-bg-drag[data-dragging='true'] {
+    background: rgba(210, 160, 80, 0.06) !important;
+  }
+
+  /* Film bar fill gradient */
+  .film-bar-fill {
+    background: linear-gradient(
+      90deg,
+      rgba(120, 85, 30, 0.6)  0%,
+      rgba(210, 160, 80, 0.4) 100%
+    );
+    transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  }
 }
