@@ -2,10 +2,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "c
 import { Button } from "components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "components/ui/card"
 import Link from "next/link"
-import { Event } from "@prisma/client"
+import { Prisma } from '@prisma/client'
 import { Badge } from "components/ui/badge"
 
-type EventWithCount = Event & {
+type EventWithCount = Prisma.EventGetPayload<{
+  include: {
+    _count: {
+      select: { uploads: true }
+    }
+  }
+}> & {
   _count: {
     uploads: number
   }
