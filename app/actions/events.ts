@@ -76,7 +76,7 @@ export async function createEventAction(
   await markTokenUsed(token)
 
   // 7. Build eventUrl
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"
+  const baseUrl = process.env.NEXTAUTH_URL || "http://localhost:3000"
   const eventUrl = `${baseUrl}/event/${slug}`
 
   return { success: true, slug, eventUrl }
