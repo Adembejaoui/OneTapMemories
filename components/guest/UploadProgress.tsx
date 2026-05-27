@@ -7,10 +7,10 @@ interface UploadProgressProps {
 }
 
 export default function UploadProgress({ uploaded, max, totalEvent }: UploadProgressProps) {
-  const pct   = max > 0 ? Math.round((uploaded / max) * 100) : 0;
+  const pct = max > 0 ? Math.min((uploaded / max) * 100, 100) : 0;
   const full  = uploaded >= max;
   const holes = Math.min(max, 20);
-  const totaleimage = uploaded + totalEvent!;
+  const totaleimage = uploaded + (totalEvent ?? 0);
 
   return (
     <div className="my-6">
@@ -44,12 +44,10 @@ export default function UploadProgress({ uploaded, max, totalEvent }: UploadProg
             style={{ width: `${pct}%` }}
           />
           <div className="absolute inset-0 flex items-center justify-center gap-1 font-courier text-[0.75rem] tracking-[0.08em]">
-            <span className="font-bold text-[var(--film-text-count)]">{totaleimage}</span>
-            <span className="text-[var(--film-gold-45)]">/</span>
-            <span className="text-[var(--film-text-meta)]">{max}</span>
+            <span className="font-bold text-[var(--film-text-count)]">{uploaded} / {max}</span>
             {full && (
               <span className="ml-2 px-2 py-[1px] rounded-[2px] border border-[var(--film-gold-45)] text-[0.6rem] tracking-[0.1em] uppercase text-[var(--film-gold-60)]">
-                Roll full
+                 {max} Roll full
               </span>
             )}
           </div>

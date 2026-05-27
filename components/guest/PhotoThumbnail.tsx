@@ -6,6 +6,7 @@ type FileStatus = {
   name: string;
   status: "pending" | "uploading" | "done" | "error";
   error?: string;
+  progress?: number;
 };
 
 interface PhotoThumbnailProps {
@@ -51,11 +52,16 @@ export default function PhotoThumbnail({ file, status, onRemove }: PhotoThumbnai
 
           {/* Status overlays */}
           {status.status === "uploading" && (
-            <div className="absolute inset-0 flex items-center justify-center" style={{ background: "var(--film-upload-overlay)" }}>
+            <div className="absolute inset-0 flex flex-col items-center justify-center" style={{ background: "var(--film-upload-overlay)" }}>
               <div
-                className="w-7 h-7 rounded-full border-2 border-t-[var(--film-gold)] animate-film-spin"
+                className="w-7 h-7 rounded-full border-2 border-t-[var(--film-gold)] animate-film-spin mb-1"
                 style={{ borderColor: "rgba(210,160,80,0.25)", borderTopColor: "var(--film-gold)" }}
               />
+              {status.progress !== undefined && (
+                <span className="font-courier text-[0.55rem] text-[var(--film-gold-60)]">
+                  {status.progress}%
+                </span>
+              )}
             </div>
           )}
 

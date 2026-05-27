@@ -1,16 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import UploadZone from "./UploadZone";
 import PhotoThumbnail from "./PhotoThumbnail";
 import UploadedPhoto from "./UploadedPhoto";
 import UploadProgress from "./UploadProgress";
 import PhotoModal from "./PhotoModal";
+import { validateFileType, validateFileSize, validateFileContent } from "@/lib/upload-validator";
+import { compressImage } from "@/lib/image-processor";
 
 type FileStatus = {
   name: string;
   status: "pending" | "uploading" | "done" | "error";
   error?: string;
+  progress?: number;
 };
 
 interface Upload {
@@ -30,22 +33,243 @@ interface GuestUploadPageProps {
   };
 }
 
+const MAX_CONCURRENT_UPLOADS = 3;
+const MAX_RETRIES = 3;
+const RETRY_DELAY_BASE = 1000;
+const GALLERY_PAGE_SIZE = 20;
+
 export default function GuestUploadPage({ event }: GuestUploadPageProps) {
-  const [guestToken,    setGuestToken]    = useState<string>("");
+  const [guestToken, setGuestToken] = useState<string>("");
   const [uploadedCount, setUploadedCount] = useState<number>(0);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [fileStatuses,  setFileStatuses]  = useState<Map<string, FileStatus>>(new Map());
-  const [globalError,   setGlobalError]   = useState<string | null>(null);
-  const [showSuccess,   setShowSuccess]   = useState(false);
+  const [fileStatuses, setFileStatuses] = useState<Map<string, FileStatus>>(new Map());
+  const [globalError, setGlobalError] = useState<string | null>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
   const [eventUploads, setEventUploads] = useState<Upload[]>([]);
   const [loadingGallery, setLoadingGallery] = useState(true);
   const [totalEventImages, setTotalEventImages] = useState<number>(0);
-  const [displayCount, setDisplayCount] = useState<number>(20); // pagination: images per page
+  const [displayCount, setDisplayCount] = useState<number>(GALLERY_PAGE_SIZE);
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedImageUrl, setSelectedImageUrl] = useState<string>("");
   const [selectedImageIndex, setSelectedImageIndex] = useState<number>(0);
 
-  /* ── Guest token ── */
+  const updateFileStatus = useCallback((filename: string, status: Partial<FileStatus>) => {
+    setFileStatuses(prev => {
+      const m = new Map(prev);
+      const existing = m.get(filename) ?? { name: filename, status: "pending" };
+      m.set(filename, { ...existing, ...status });
+      return m;
+    });
+  }, []);
+
+const fetchUploadUrls = useCallback(async (files: {name: string; size: number}[]): Promise<{
+     success: boolean;
+     uploadUrls: Array<{
+       filename: string;
+       success: boolean;
+       uploadUrl?: string;
+       path?: string;
+       error?: string;
+     }>;
+   }> => {
+     const filenames = files.map(f => f.name);
+     const fileSizes = files.map(f => f.size);
+     
+     const res = await fetch("/api/upload/url", {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({
+         filenames,
+         fileSizes,
+         eventSlug: event.slug,
+         guestToken,
+       }),
+     });
+     const json = await res.json();
+     if (!res.ok) {
+       setGlobalError(json.error || "Failed to get upload URLs");
+       return { success: false, uploadUrls: [] };
+     }
+     return json;
+   }, [event.slug, guestToken]);
+
+  const uploadWithRetry = useCallback(async (
+    file: File,
+    uploadUrl: string,
+  ): Promise<boolean> => {
+    let lastError: string | undefined;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        updateFileStatus(file.name, { status: "uploading", progress: 0 });
+
+        const xhr = new XMLHttpRequest();
+        const uploadPromise = new Promise<boolean>((resolve, reject) => {
+          xhr.upload.addEventListener("progress", (e) => {
+            if (e.lengthComputable) {
+              const percent = Math.round((e.loaded / e.total) * 100);
+              updateFileStatus(file.name, { progress: percent });
+            }
+          });
+
+          xhr.addEventListener("load", () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve(true);
+            } else {
+              reject(new Error(`Upload failed with status ${xhr.status}`));
+            }
+          });
+
+          xhr.addEventListener("error", () => {
+            reject(new Error("Network error"));
+          });
+
+          xhr.open("PUT", uploadUrl);
+          xhr.setRequestHeader("Content-Type", file.type);
+          xhr.send(file);
+        });
+
+        await uploadPromise;
+        updateFileStatus(file.name, { status: "done", progress: 100 });
+        return true;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        if (attempt < MAX_RETRIES) {
+          const delay = RETRY_DELAY_BASE * Math.pow(2, attempt - 1);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    updateFileStatus(file.name, { status: "error", error: lastError, progress: 0 });
+    return false;
+  }, [updateFileStatus]);
+
+  const createUploadRecords = useCallback(async (uploads: { url: string }[]): Promise<Upload[]> => {
+    const res = await fetch("/api/uploads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventId: event.id,
+        uploads,
+        guestToken,
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || "Failed to save uploads");
+    }
+    return json.data;
+  }, [event.id, guestToken]);
+
+  const processAndUploadFiles = useCallback(async (files: File[]): Promise<File[]> => {
+    const compressionPromises = files.map(async (file) => {
+      try {
+        // Validate file content (magic bytes) before processing for security
+        const contentCheck = await validateFileContent(file);
+        if (!contentCheck.valid) {
+          updateFileStatus(file.name, { status: "error", error: contentCheck.error });
+          return null;
+        }
+        const compressed = await compressImage(file, 0.85, 1920, 1920);
+        return compressed;
+      } catch (e) {
+        updateFileStatus(file.name, { status: "error", error: "Failed to process image" });
+        return null;
+      }
+    });
+
+    const results = await Promise.all(compressionPromises);
+    return results.filter((f): f is File => f !== null);
+  }, [updateFileStatus]);
+
+  const uploadFiles = async () => {
+    if (selectedFiles.length === 0) return;
+    setShowSuccess(false);
+    setGlobalError(null);
+
+    try {
+      const processedFiles = await processAndUploadFiles(selectedFiles);
+      
+      // Validate files (MIME type, extension, size)
+      const validFiles: File[] = []
+      for (const f of processedFiles) {
+        const typeCheck = validateFileType(f);
+        if (!typeCheck.valid) {
+          updateFileStatus(f.name, { status: "error", error: typeCheck.error });
+          continue;
+        }
+        const sizeCheck = validateFileSize(f);
+        if (!sizeCheck.valid) {
+          updateFileStatus(f.name, { status: "error", error: sizeCheck.error });
+          continue;
+        }
+        validFiles.push(f)
+      }
+
+      // Pass both filenames and sizes for server validation
+      const filesWithSizes = validFiles.map(f => ({ name: f.name, size: f.size }));
+      const urlResult = await fetchUploadUrls(filesWithSizes);
+
+      if (!urlResult.success) {
+        return;
+      }
+
+      const successfulUrls = urlResult.uploadUrls.filter(u => u.success && u.uploadUrl && u.path);
+      const failedUrls = urlResult.uploadUrls.filter(u => !u.success);
+
+      for (const failed of failedUrls) {
+        updateFileStatus(failed.filename, { status: "error", error: failed.error });
+      }
+
+      // Semaphore-based concurrent upload limiting (efficient)
+      const semaphore = MAX_CONCURRENT_UPLOADS;
+      let activeUploads = 0;
+      const uploadedPaths: { url: string }[] = [];
+      
+      const waitForSlot = () => new Promise<void>(resolve => {
+        const check = () => {
+          if (activeUploads < semaphore) resolve();
+          else setTimeout(check, 25);
+        };
+        check();
+      });
+
+      const uploadTasks = validFiles.map(async (file) => {
+        const urlData = successfulUrls.find(u => u.filename === file.name);
+        if (!urlData?.uploadUrl) {
+          updateFileStatus(file.name, { status: "error", error: "No upload URL available" });
+          return;
+        }
+        await waitForSlot();
+        activeUploads++;
+        try {
+          const success = await uploadWithRetry(file, urlData.uploadUrl);
+          if (success) {
+            const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/events/${urlData.path}`;
+            uploadedPaths.push({ url: publicUrl });
+          }
+        } finally {
+          activeUploads--;
+        }
+      });
+
+      await Promise.all(uploadTasks);
+
+      if (uploadedPaths.length > 0) {
+        const savedUploads = await createUploadRecords(uploadedPaths);
+        setEventUploads(prev => [...savedUploads.reverse(), ...prev]);
+        setUploadedCount(c => c + savedUploads.length);
+        setTotalEventImages(c => c + savedUploads.length);
+      }
+
+      setShowSuccess(true);
+      setSelectedFiles([]);
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : "Upload failed");
+    }
+  };
+
   useEffect(() => {
     const key = `guest_token_${event.id}`;
     const existing = sessionStorage.getItem(key);
@@ -56,10 +280,7 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
       sessionStorage.setItem(key, token);
       setGuestToken(token);
     }
-  }, [event.id]);
 
-  /* ── Fetch existing uploads for gallery ── */
-  useEffect(() => {
     const fetchUploads = async () => {
       try {
         const res = await fetch(`/api/uploads?eventId=${event.id}`);
@@ -68,7 +289,8 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
           const uploads = json.data ?? [];
           setEventUploads(uploads);
           setTotalEventImages(uploads.length);
-          setDisplayCount(20); // reset pagination when event changes
+          const myToken = sessionStorage.getItem(key);
+          setUploadedCount(uploads.filter((u: Upload) => u.guestToken === myToken).length);
         }
       } catch (err) {
         console.error('Failed to fetch uploads:', err);
@@ -79,109 +301,33 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
     fetchUploads();
   }, [event.id]);
 
-   /* ── Upload handler ── */
-   const uploadFiles = async () => {
-     if (selectedFiles.length === 0) return;
-     setShowSuccess(false);
-
-     // Set all files to uploading
-     const initialStatuses = new Map(fileStatuses);
-     selectedFiles.forEach(file => {
-       initialStatuses.set(file.name, { name: file.name, status: "uploading" });
-     });
-     setFileStatuses(initialStatuses);
-
-     // Build batch formData
-     const formData = new FormData();
-     selectedFiles.forEach(file => {
-       formData.append("files", file);
-     });
-     formData.append("eventSlug", event.slug);
-     formData.append("guestToken", guestToken);
-
-     try {
-       const res = await fetch("/api/upload/batch", { method: "POST", body: formData });
-       const json = await res.json();
-
-       if (res.ok && json.success) {
-         // Process per-file results
-         json.results.forEach((result: { fileName: string; success: boolean; error?: string }) => {
-           if (result.success) {
-             setFileStatuses(prev => {
-               const m = new Map(prev);
-               m.set(result.fileName, { name: result.fileName, status: "done" });
-               return m;
-             });
-           } else {
-             setFileStatuses(prev => {
-               const m = new Map(prev);
-               m.set(result.fileName, {
-                 name: result.fileName,
-                 status: "error",
-                 error: result.error || "Upload failed",
-               });
-               return m;
-             });
-           }
-         });
-
-         const succeededCount = json.results.filter((r: { success: boolean }) => r.success).length;
-         setUploadedCount(c => c + succeededCount);
-         setTotalEventImages(c => c + succeededCount);
-
-         if (succeededCount < selectedFiles.length) {
-           setGlobalError(`Some files failed to upload. ${json.summary.failed} of ${json.summary.total} failed.`);
-         }
-       } else {
-         // Handle batch-level errors (validation, limit, etc.)
-         setGlobalError(json.error || "Upload failed");
-         // Reset all to error state
-         selectedFiles.forEach(file => {
-           setFileStatuses(prev => {
-             const m = new Map(prev);
-             m.set(file.name, { name: file.name, status: "error", error: json.error || "Upload failed" });
-             return m;
-           });
-         });
-       }
-     } catch {
-       setGlobalError("Network error");
-       selectedFiles.forEach(file => {
-         setFileStatuses(prev => {
-           const m = new Map(prev);
-           m.set(file.name, { name: file.name, status: "error", error: "Network error" });
-           return m;
-         });
-       });
-     }
-
-     setShowSuccess(true);
-     setSelectedFiles([]);
-   };
-
-  /* ── Derived state ── */
   const slotsRemaining = event.maxUploadsPerGuest - uploadedCount;
-  const isUploading    = Array.from(fileStatuses.values()).some((s) => s.status === "uploading");
-  const canUpload      = slotsRemaining > 0 && selectedFiles.length > 0 && !isUploading;
-  const limitReached   = uploadedCount >= event.maxUploadsPerGuest;
+  const isUploading = Array.from(fileStatuses.values()).some(s => s.status === "uploading");
+  const canUpload = slotsRemaining > 0 && selectedFiles.length > 0 && !isUploading;
+  const limitReached = uploadedCount >= event.maxUploadsPerGuest;
 
-  const handleRemoveFile = (fileName: string) => {
-    setSelectedFiles((prev) => prev.filter((f) => f.name !== fileName));
-    setFileStatuses((prev) => { const m = new Map(prev); m.delete(fileName); return m; });
-  };
+  const handleRemoveFile = useCallback((fileName: string) => {
+    setSelectedFiles(prev => prev.filter(f => f.name !== fileName));
+    setFileStatuses(prev => {
+      const m = new Map(prev);
+      m.delete(fileName);
+      return m;
+    });
+  }, []);
 
-  const openModal = (url: string, index: number) => {
+  const openModal = useCallback((url: string, index: number) => {
     setSelectedImageUrl(url);
     setSelectedImageIndex(index);
     setModalOpen(true);
-  };
-  const closeModal = () => {
+  }, []);
+  
+  const closeModal = useCallback(() => {
     setModalOpen(false);
     setSelectedImageUrl("");
     setSelectedImageIndex(0);
-  };
+  }, []);
 
-  const goToPrev = () => {
+  const goToPrev = useCallback(() => {
     const newIndex = selectedImageIndex - 1;
     if (newIndex >= 0) {
       const upload = eventUploads[newIndex];
@@ -190,9 +336,9 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
         setSelectedImageUrl(upload.url);
       }
     }
-  };
+  }, [selectedImageIndex, eventUploads]);
 
-  const goToNext = () => {
+  const goToNext = useCallback(() => {
     const newIndex = selectedImageIndex + 1;
     if (newIndex < eventUploads.length) {
       const upload = eventUploads[newIndex];
@@ -201,31 +347,35 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
         setSelectedImageUrl(upload.url);
       }
     }
-  };
+  }, [selectedImageIndex, eventUploads]);
 
-  const loadMore = () => {
-    setDisplayCount((prev) => Math.min(prev + 20, eventUploads.length));
-  };
+  const loadMore = useCallback(() => {
+    setDisplayCount(prev => Math.min(prev + GALLERY_PAGE_SIZE, eventUploads.length));
+  }, [eventUploads.length]);
 
-  /* ═══════════════════════════════════════
-     Render
-  ═══════════════════════════════════════ */
+  const visibleUploads = useMemo(() => 
+    eventUploads.slice(0, displayCount), 
+  [eventUploads, displayCount]);
+
+  const thumbnailUrl = useCallback((url: string): string => {
+    if (!url) return "";
+    const baseUrl = url.split("?")[0];
+    return `${baseUrl}?width=400&height=400&resize=cover`;
+  }, []);
+
   return (
+    
     <div
       className="relative min-h-screen overflow-x-hidden film-page-grain film-page-vignette"
       style={{ background: "var(--film-bg)", color: "var(--film-text-primary)" }}
     >
-      {/* ── Film strip edges ── */}
-      {["left", "right"].map((side) => (
+     {["left", "right"].map((side) => (
         <div
           key={side}
           aria-hidden
-          className={[
-            "fixed top-0 bottom-0 z-10 w-[22px] flex flex-col items-center justify-around py-3",
-            side === "left"
-              ? "left-0 border-r border-[var(--film-gold-10)]"
-              : "right-0 border-l border-[var(--film-gold-10)]",
-          ].join(" ")}
+          className={`fixed top-0 bottom-0 z-10 w-[22px] flex flex-col items-center justify-around py-3 ${
+            side === "left" ? "left-0 border-r" : "right-0 border-l"
+          } border-[var(--film-gold-10)]`}
           style={{ background: "#050402" }}
         >
           {Array.from({ length: 24 }).map((_, i) => (
@@ -238,12 +388,9 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
         </div>
       ))}
 
-      {/* ── Main content ── */}
       <div className="relative z-[5] max-w-[760px] mx-auto px-12 pt-16 pb-24 sm:px-7 sm:pt-10 sm:pb-16">
 
-        {/* ── Header ── */}
         <header className="mb-10 text-center">
-          {/* Eyebrow */}
           <div className="flex items-center justify-center gap-2.5 mb-5">
             <span className="flex-1 max-w-[60px] h-px bg-[var(--film-gold-20)]" />
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--film-gold-60)]" />
@@ -257,30 +404,27 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
           <h1 className="font-playfair text-[clamp(2rem,5vw,3.2rem)] font-semibold leading-[1.15] tracking-[-0.01em] mb-2 text-[var(--film-text-primary)]">
             {event.name}
           </h1>
-
-          <p className="font-playfair italic text-[0.95rem] tracking-[0.02em] text-[var(--film-text-muted)]">
-            Share your moments — every frame tells a story
-          </p>
-        </header>
-
-         {/* ── Event gallery ── */}
       
 
-        {/* ── Film strip progress ── */}
+         <p className="font-playfair italic text-[0.95rem] tracking-[0.02em] text-[var(--film-text-muted)]">
+            Upload up to {event.maxUploadsPerGuest} photos — every frame tells a story
+        </p>
+          
+        </header>
+
         <UploadProgress
           uploaded={uploadedCount}
           max={event.maxUploadsPerGuest}
           totalEvent={totalEventImages}
         />
 
-        {/* ── Global error alert ── */}
         {globalError && (
           <div
             className="flex items-center gap-2.5 px-4 py-3 rounded-[3px] border font-courier text-[0.8rem] tracking-[0.03em] mb-5"
             style={{
-              background:   "var(--film-alert-error-bg)",
-              borderColor:  "var(--film-alert-error-border)",
-              color:        "var(--film-alert-error-text)",
+              background: "var(--film-alert-error-bg)",
+              borderColor: "var(--film-alert-error-border)",
+              color: "var(--film-alert-error-text)",
             }}
             role="alert"
           >
@@ -295,34 +439,30 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
           </div>
         )}
 
-        {/* ── Success banner ── */}
         {showSuccess && !globalError && selectedFiles.length === 0 && (
           <div
             className="flex items-center gap-2.5 px-4 py-3 rounded-[3px] border font-courier text-[0.8rem] tracking-[0.03em] mb-5"
             style={{
-              background:  "var(--film-alert-ok-bg)",
+              background: "var(--film-alert-ok-bg)",
               borderColor: "var(--film-alert-ok-border)",
-              color:       "var(--film-alert-ok-text)",
+              color: "var(--film-alert-ok-text)",
             }}
             role="alert"
           >
             <span className="flex-shrink-0 text-base">✓</span>
             <span>
               Frames developed successfully!
-              {slotsRemaining > 0 &&
-                ` ${slotsRemaining} slot${slotsRemaining > 1 ? "s" : ""} remaining on this roll.`}
+              {slotsRemaining > 0 && ` ${slotsRemaining} slot${slotsRemaining > 1 ? "s" : ""} remaining on this roll.`}
             </span>
           </div>
         )}
 
-        {/* ── Upload section ── */}
         {limitReached ? (
-          /* Roll complete state */
           <div
             className="text-center py-12 px-8 rounded-[3px] border mt-4"
             style={{
               borderColor: "var(--film-gold-15)",
-              background:  "var(--film-gold-05)",
+              background: "var(--film-gold-05)",
             }}
           >
             <div className="mb-4 flex justify-center">
@@ -338,7 +478,6 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
               You&apos;ve shared {uploadedCount} frame{uploadedCount !== 1 ? "s" : ""} with this event
             </p>
           </div>
-
         ) : (
           <>
             <UploadZone
@@ -349,8 +488,6 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
 
             {selectedFiles.length > 0 && (
               <section className="mt-8 animate-film-fadeup">
-
-                {/* Section header */}
                 <div className="flex items-baseline gap-2 mb-4">
                   <h2 className="font-playfair text-[1rem] font-normal text-[var(--film-text-muted)] m-0 flex items-center gap-2">
                     Selected frames
@@ -360,11 +497,10 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
                   </h2>
                 </div>
 
-                {/* Polaroid grid */}
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3 mb-6 sm:grid-cols-[repeat(auto-fill,minmax(90px,1fr))] sm:gap-2">
                   {selectedFiles.map((file) => {
                     const status = fileStatuses.get(file.name) ?? {
-                      name:   file.name,
+                      name: file.name,
                       status: "pending" as const,
                     };
                     return (
@@ -382,22 +518,10 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
                   })}
                 </div>
 
-                {/* Develop button */}
                 <button
                   onClick={uploadFiles}
                   disabled={!canUpload}
-                  className={[
-                    "relative w-full py-[0.9rem] px-6 overflow-hidden",
-                    "rounded-[3px] border border-[var(--film-gold-45)]",
-                    "font-courier text-[0.85rem] tracking-[0.12em] uppercase",
-                    "text-[var(--film-text-label)] bg-transparent",
-                    "flex items-center justify-center gap-0",
-                    "transition-all duration-200 ease-in-out",
-                    "cursor-pointer",
-                    "hover:enabled:border-[var(--film-gold)] hover:enabled:text-[var(--film-text-primary)] hover:enabled:bg-[rgba(210,160,80,0.08)]",
-                    "active:enabled:scale-[0.99]",
-                    "disabled:opacity-35 disabled:cursor-not-allowed",
-                  ].join(" ")}
+                  className={`relative w-full py-[0.9rem] px-6 overflow-hidden rounded-[3px] border border-[var(--film-gold-45)] font-courier text-[0.85rem] tracking-[0.12em] uppercase text-[var(--film-text-label)] bg-transparent flex items-center justify-center gap-0 transition-all duration-200 ease-in-out cursor-pointer hover:enabled:border-[var(--film-gold)] hover:enabled:text-[var(--film-text-primary)] hover:enabled:bg-[rgba(210,160,80,0.08)] active:enabled:scale-[0.99] disabled:opacity-35 disabled:cursor-not-allowed`}
                 >
                   {isUploading ? (
                     <>
@@ -419,9 +543,10 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
               </section>
             )}
           </>
-         )}
-         {!loadingGallery && eventUploads.length > 0 && (
-           <section className="pt-10 mb-10">
+        )}
+
+        {!loadingGallery && eventUploads.length > 0 && (
+          <section className="pt-10 mb-10">
             <div className="flex items-baseline justify-between gap-4 mb-4">
               <h2 className="font-playfair text-[1rem] font-normal text-[var(--film-text-muted)] m-0 flex items-center gap-2">
                 Event gallery
@@ -437,36 +562,30 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
               </span>
             </div>
 
-             {/* Image grid - paginated */}
-             <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3 mb-4 sm:grid-cols-[repeat(auto-fill,minmax(90px,1fr))] sm:gap-2">
-               {eventUploads.map((upload, index) => {
-                 if (index >= displayCount) return null;
-                 return (
-                   <UploadedPhoto
-                     key={upload.id}
-                     url={upload.url}
-                     uploadedAt={upload.createdAt}
-                     guestLabel={`Guest ${upload.guestToken.slice(0, 4)}`}
-                     onClick={() => openModal(upload.url, index)}
-                   />
-                 );
-               })}
-             </div>
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3 mb-4 sm:grid-cols-[repeat(auto-fill,minmax(90px,1fr))] sm:gap-2">
+              {visibleUploads.map((upload, index) => (
+                <UploadedPhoto
+                  key={upload.id}
+                  url={thumbnailUrl(upload.url)}
+                  uploadedAt={upload.createdAt}
+                  guestLabel={`Guest ${upload.guestToken.slice(0, 4)}`}
+                  onClick={() => openModal(upload.url, index)}
+                />
+              ))}
+            </div>
 
-             {/* Load More button */}
-             {displayCount < eventUploads.length && (
-               <button
-                 onClick={loadMore}
-                 className="w-full py-3 rounded-[3px] border border-[var(--film-gold-45)] font-courier text-[0.75rem] tracking-[0.1em] uppercase text-[var(--film-text-label)] bg-transparent hover:enabled:border-[var(--film-gold)] hover:enabled:text-[var(--film-text-primary)] hover:enabled:bg-[rgba(210,160,80,0.08)] transition-all duration-200"
-               >
-                 Load {Math.min(20, eventUploads.length - displayCount)} more
-               </button>
-             )}
-           </section>
-         )}
-       </div>
+            {displayCount < eventUploads.length && (
+              <button
+                onClick={loadMore}
+                className="w-full py-3 rounded-[3px] border border-[var(--film-gold-45)] font-courier text-[0.75rem] tracking-[0.1em] uppercase text-[var(--film-text-label)] bg-transparent hover:enabled:border-[var(--film-gold)] hover:enabled:text-[var(--film-text-primary)] hover:enabled:bg-[rgba(210,160,80,0.08)] transition-all duration-200"
+              >
+                Load {Math.min(GALLERY_PAGE_SIZE, eventUploads.length - displayCount)} more
+              </button>
+            )}
+          </section>
+        )}
+      </div>
 
-      {/* Photo lightbox modal */}
       <PhotoModal
         url={selectedImageUrl}
         isOpen={modalOpen}
@@ -476,7 +595,7 @@ export default function GuestUploadPage({ event }: GuestUploadPageProps) {
         hasPrev={selectedImageIndex > 0}
         hasNext={selectedImageIndex < eventUploads.length - 1}
       />
-    </div>
+</div>
   );
+  
 }
-

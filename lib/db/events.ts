@@ -11,7 +11,7 @@ export async function createEvent(data: CreateEventInput) {
     name: data.name,
     slug: data.slug,
     email: data.email,
-    maxUploadsPerGuest: data.maxUploadsPerGuest ?? 10,
+    maxUploadsPerGuest: data.maxUploadsPerGuest ?? 6,
     ...(data.image !== undefined && { image: data.image }),
   };
   return prisma.event.create({
